@@ -1,23 +1,44 @@
+# System packages for OpenCV and computer vision libraries
+# Required for Streamlit Cloud deployment
+
+# Core graphics and GUI libraries
 libgl1-mesa-glx
 libglib2.0-0
 libsm6
 libxext6
 libxrender-dev
 libgomp1
+
+# GTK libraries for GUI components
 libgtk-3-0
 libcairo-gobject2
-libgtk2.0-dev
-pkg-config
+
+# Video and image processing libraries
 libavcodec-dev
 libavformat-dev
 libswscale-dev
+
+# GStreamer for video processing
 libgstreamer-plugins-base1.0-dev
 libgstreamer1.0-dev
+
+# Image format libraries
 libjpeg-dev
 libpng-dev
 libtiff-dev
+
+# Additional video codecs
 libdc1394-22-dev
 libxvidcore-dev
 libx264-dev
+
+# Mathematical libraries
 libatlas-base-dev
 gfortran
+libblas-dev
+liblapack-dev
+
+# Additional dependencies for EasyOCR
+libopenblas-dev
+libhdf5-dev
+pkg-config
