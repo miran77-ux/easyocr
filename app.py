@@ -1,36 +1,85 @@
 import streamlit as st
-import cv2
-import numpy as np
-import easyocr
-from ultralytics import YOLO
-from PIL import Image, ImageDraw, ImageFont
-import torch
 import warnings
-import urllib.request
-from pathlib import Path
-import tempfile
+import sys
 import os
-import time
-import io
-import base64
-from PIL import Image
-import threading
-import queue
 
-# Monkey-patch for Pillow >= 10.0 (ANTIALIAS removed)
-if not hasattr(Image, 'ANTIALIAS'):
-    Image.ANTIALIAS = Image.Resampling.LANCZOS
-
-# Suppress warnings
+# Suppress warnings early
 warnings.filterwarnings("ignore")
+os.environ['PYTHONWARNINGS'] = 'ignore'
 
-# Page config
+# Set environment variables for better compatibility
+os.environ['TORCH_HOME'] = '/tmp/torch'
+os.environ['HF_HUB_CACHE'] = '/tmp/hf_cache'
+
+# Page config (must be first Streamlit command)
 st.set_page_config(
     page_title="YOLO + OCR Detection",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Try to import required libraries with error handling
+try:
+    import cv2
+    cv2_available = True
+except ImportError as e:
+    st.error(f"OpenCV import failed: {e}")
+    cv2_available = False
+
+try:
+    import numpy as np
+    import easyocr
+    from PIL import Image, ImageDraw, ImageFont
+    import torch
+    import urllib.request
+    from pathlib import Path
+    import tempfile
+    import time
+    import io
+    import base64
+    import threading
+    import queue
+    
+    core_imports_available = True
+except ImportError as e:
+    st.error(f"Core imports failed: {e}")
+    core_imports_available = False
+
+# Try YOLO import separately
+try:
+    from ultralytics import YOLO
+    yolo_available = True
+except ImportError as e:
+    st.error(f"YOLO import failed: {e}")
+    yolo_available = False
+
+# Check if all required components are available
+if not (cv2_available and core_imports_available and yolo_available):
+    st.error("""
+    ## ❌ Import Error
+    
+    Some required libraries failed to import. This is likely due to:
+    
+    1. **System dependencies missing** - The `packages.txt` file needs system packages
+    2. **Library version conflicts** - PyTorch/OpenCV version mismatch
+    3. **Streamlit Cloud limitations** - Some packages might not be fully supported
+    
+    ### 🛠️ Solutions:
+    
+    1. **Create/Update `packages.txt`** with system dependencies
+    2. **Fix `requirements.txt`** with compatible versions
+    3. **Restart the app** after making changes
+    
+    ### 📋 Required Files:
+    - `requirements.txt` (with fixed versions)
+    - `packages.txt` (with system dependencies)
+    """)
+    st.stop()
+
+# Monkey-patch for Pillow >= 10.0 (ANTIALIAS removed)
+if not hasattr(Image, 'ANTIALIAS'):
+    Image.ANTIALIAS = Image.Resampling.LANCZOS
 
 # Custom CSS for better UI
 st.markdown("""
@@ -70,12 +119,6 @@ st.markdown("""
         border-radius: 5px;
         border: 1px solid #f5c6cb;
     }
-    .camera-container {
-        border: 2px solid #667eea;
-        border-radius: 10px;
-        padding: 10px;
-        background: #f8f9fa;
-    }
     .tab-content {
         padding: 20px;
         background: white;
@@ -89,64 +132,75 @@ st.markdown("""
 st.markdown("""
 <div class="main-header">
     <h1>🔍 YOLO + OCR Detection System</h1>
-    <p>Upload images or use live camera for object detection and text recognition</p>
+    <p>Upload images for object detection and text recognition</p>
+    <small>⚠️ Live camera disabled on Streamlit Cloud</small>
 </div>
 """, unsafe_allow_html=True)
 
 def setup_pytorch_compatibility():
-    """Setup PyTorch compatibility for YOLO"""
+    """Setup PyTorch compatibility for YOLO with better error handling"""
     try:
-        from torch.serialization import add_safe_globals
+        # Check PyTorch version
+        torch_version = torch.__version__
+        st.info(f"🔍 PyTorch version: {torch_version}")
         
-        safe_classes = []
+        # For PyTorch 2.1+, try to set up safe globals
+        if hasattr(torch, 'serialization') and hasattr(torch.serialization, 'add_safe_globals'):
+            try:
+                from torch.serialization import add_safe_globals
+                
+                safe_classes = []
+                
+                # Add essential classes
+                try:
+                    from ultralytics.nn.tasks import DetectionModel
+                    safe_classes.append(DetectionModel)
+                except ImportError:
+                    pass
+                
+                try:
+                    from torch.nn.modules.container import Sequential
+                    safe_classes.append(Sequential)
+                except ImportError:
+                    pass
+                
+                try:
+                    import ultralytics.nn.modules as ul_modules
+                    modules = ['Conv', 'C2f', 'SPPF', 'Bottleneck', 'DFL', 'Detect', 'Segment']
+                    for module_name in modules:
+                        if hasattr(ul_modules, module_name):
+                            safe_classes.append(getattr(ul_modules, module_name))
+                except ImportError:
+                    pass
+                
+                try:
+                    from collections import OrderedDict
+                    safe_classes.append(OrderedDict)
+                except ImportError:
+                    pass
+                
+                if safe_classes:
+                    add_safe_globals(safe_classes)
+                    st.success(f"✅ Added {len(safe_classes)} classes to safe globals")
+                    
+            except Exception as e:
+                st.warning(f"⚠️ Safe globals setup warning: {e}")
         
-        # Add essential classes
-        try:
-            from ultralytics.nn.tasks import DetectionModel
-            safe_classes.append(DetectionModel)
-        except ImportError:
-            pass
-        
-        try:
-            from torch.nn.modules.container import Sequential
-            safe_classes.append(Sequential)
-        except ImportError:
-            pass
-        
-        try:
-            import ultralytics.nn.modules as ul_modules
-            modules = ['Conv', 'C2f', 'SPPF', 'Bottleneck', 'DFL', 'Detect', 'Segment']
-            for module_name in modules:
-                if hasattr(ul_modules, module_name):
-                    safe_classes.append(getattr(ul_modules, module_name))
-        except ImportError:
-            pass
-        
-        try:
-            from collections import OrderedDict
-            safe_classes.append(OrderedDict)
-        except ImportError:
-            pass
-        
-        if safe_classes:
-            add_safe_globals(safe_classes)
-            return True
-            
-    except ImportError:
         return True
-    except Exception:
+        
+    except Exception as e:
+        st.error(f"❌ PyTorch compatibility setup failed: {e}")
         return False
-    
-    return True
 
 @st.cache_resource
 def load_models():
-    """Load YOLO and OCR models with caching"""
+    """Load YOLO and OCR models with caching and better error handling"""
     
     # Setup compatibility
-    setup_pytorch_compatibility()
+    if not setup_pytorch_compatibility():
+        st.warning("⚠️ Compatibility setup had issues, but continuing...")
     
-    # Progress bar
+    # Progress tracking
     progress_bar = st.progress(0)
     status_text = st.empty()
     
@@ -159,31 +213,80 @@ def load_models():
         if not Path(model_path).exists():
             status_text.text("📥 Downloading YOLO model...")
             progress_bar.progress(30)
-            urllib.request.urlretrieve(
-                "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
-                model_path
-            )
+            
+            try:
+                urllib.request.urlretrieve(
+                    "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
+                    model_path
+                )
+                st.success("✅ YOLO model downloaded")
+            except Exception as download_error:
+                st.error(f"❌ Failed to download YOLO model: {download_error}")
+                raise download_error
         
-        # Load YOLO model
+        # Load YOLO model with multiple fallback methods
         status_text.text("📄 Loading YOLO model...")
         progress_bar.progress(50)
         
-        try:
-            model = YOLO(model_path)
-        except Exception as e:
-            # Try monkey patching for PyTorch 2.6+
-            original_load = torch.load
-            torch.load = lambda *args, **kwargs: original_load(*args, **{**kwargs, 'weights_only': False})
+        model = None
+        load_methods = [
+            "standard",
+            "weights_only_false",
+            "fresh_download"
+        ]
+        
+        for method in load_methods:
             try:
-                model = YOLO(model_path)
-            finally:
-                torch.load = original_load
+                if method == "standard":
+                    model = YOLO(model_path)
+                    break
+                    
+                elif method == "weights_only_false":
+                    # Monkey patch for PyTorch 2.1+
+                    original_load = torch.load
+                    torch.load = lambda *args, **kwargs: original_load(*args, **{**kwargs, 'weights_only': False})
+                    try:
+                        model = YOLO(model_path)
+                        break
+                    finally:
+                        torch.load = original_load
+                        
+                elif method == "fresh_download":
+                    # Download fresh model to temp location
+                    temp_model = os.path.join(tempfile.gettempdir(), "yolov8n_fresh.pt")
+                    urllib.request.urlretrieve(
+                        "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
+                        temp_model
+                    )
+                    
+                    # Try loading with weights_only=False
+                    original_load = torch.load
+                    torch.load = lambda *args, **kwargs: original_load(*args, **{**kwargs, 'weights_only': False})
+                    try:
+                        model = YOLO(temp_model)
+                        break
+                    finally:
+                        torch.load = original_load
+                        
+            except Exception as method_error:
+                st.warning(f"⚠️ Method '{method}' failed: {method_error}")
+                continue
+        
+        if model is None:
+            raise Exception("All YOLO loading methods failed")
+            
+        st.success("✅ YOLO model loaded successfully")
         
         # Load OCR model
         status_text.text("📄 Loading OCR model...")
         progress_bar.progress(80)
         
-        reader = easyocr.Reader(['en'], verbose=False)
+        try:
+            reader = easyocr.Reader(['en'], verbose=False, gpu=False)  # Disable GPU for cloud
+            st.success("✅ OCR model loaded successfully")
+        except Exception as ocr_error:
+            st.error(f"❌ Failed to load OCR model: {ocr_error}")
+            raise ocr_error
         
         progress_bar.progress(100)
         status_text.text("✅ All models loaded successfully!")
@@ -200,11 +303,12 @@ def load_models():
         st.error(f"❌ Failed to load models: {str(e)}")
         st.info("""
         **Troubleshooting:**
-        1. Try refreshing the page
-        2. Check internet connection
-        3. Models will be downloaded automatically on first run
+        1. Check if all dependencies are installed correctly
+        2. Try refreshing the page
+        3. Make sure `requirements.txt` has compatible versions
+        4. Check if `packages.txt` includes system dependencies
         """)
-        st.stop()
+        raise e
 
 def enhance_image_for_ocr(image, options):
     """Apply image preprocessing for better OCR"""
@@ -248,16 +352,11 @@ def clean_ocr_text(text):
         if not line.strip():
             continue
         
-        # Apply corrections
+        # Apply corrections (basic example)
         corrected = line
         for old, new in corrections.items():
-            corrected = corrected.replace(old, new)
-        
-        # Special cases
-        if corrected.lower() in ["h3llo", "hel1o", "he11o"]:
-            corrected = "HELLO"
-        elif corrected.lower() in ["w0rld", "wor1d"]:
-            corrected = "WORLD"
+            if old in corrected and not corrected.isdigit():  # Don't replace if it's clearly a number
+                corrected = corrected.replace(old, new)
         
         cleaned_lines.append(corrected)
     
@@ -266,155 +365,75 @@ def clean_ocr_text(text):
 def process_image(image, model, reader, ocr_settings):
     """Process image with YOLO and OCR"""
     
-    # Convert PIL to OpenCV
-    if isinstance(image, Image.Image):
-        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-    else:
-        img_cv = image
-    
-    # YOLO Detection
-    results = model(img_cv)
-    annotated_frame = results[0].plot()
-    
-    # Prepare image for OCR
-    ocr_image = img_cv.copy()
-    if ocr_settings['enhance_ocr']:
-        ocr_image = enhance_image_for_ocr(img_cv, ocr_settings['preprocessing'])
-    
-    # OCR Detection
     try:
-        if ocr_settings['handwriting_mode']:
-            ocr_results = reader.readtext(ocr_image, paragraph=False, width_ths=0.8)
+        # Convert PIL to OpenCV
+        if isinstance(image, Image.Image):
+            img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         else:
-            ocr_results = reader.readtext(ocr_image)
-    except:
-        ocr_results = reader.readtext(ocr_image)
-    
-    # Draw OCR results on image
-    for detection in ocr_results:
-        box = np.array(detection[0], dtype=np.int32)
-        text = detection[1]
-        conf = detection[2]
+            img_cv = image
         
-        if conf > ocr_settings['confidence_threshold']:
-            # Draw bounding box
-            cv2.polylines(annotated_frame, [box], True, (0, 255, 0), 2)
-            
-            # Add text label
-            text_pos = (box[0][0], box[0][1] - 10)
-            cv2.putText(annotated_frame, f"{text} ({conf:.2f})", text_pos,
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    
-    # Extract text
-    detected_text = ""
-    for detection in ocr_results:
-        if detection[2] > ocr_settings['confidence_threshold']:
-            detected_text += f"{detection[1]} [Conf: {detection[2]:.2f}]\n"
-    
-    # Clean text
-    cleaned_text = clean_ocr_text(detected_text)
-    
-    # Convert back to PIL if needed
-    if isinstance(image, Image.Image):
+        # YOLO Detection
+        results = model(img_cv)
+        annotated_frame = results[0].plot()
+        
+        # Prepare image for OCR
+        ocr_image = img_cv.copy()
+        if ocr_settings.get('enhance_ocr', False):
+            ocr_image = enhance_image_for_ocr(img_cv, ocr_settings.get('preprocessing', []))
+        
+        # OCR Detection
+        try:
+            ocr_results = reader.readtext(ocr_image, paragraph=False)
+        except Exception as ocr_error:
+            st.warning(f"OCR processing warning: {ocr_error}")
+            ocr_results = []
+        
+        # Draw OCR results on image
+        for detection in ocr_results:
+            try:
+                box = np.array(detection[0], dtype=np.int32)
+                text = detection[1]
+                conf = detection[2]
+                
+                if conf > ocr_settings.get('confidence_threshold', 0.5):
+                    # Draw bounding box
+                    cv2.polylines(annotated_frame, [box], True, (0, 255, 0), 2)
+                    
+                    # Add text label
+                    text_pos = (box[0][0], box[0][1] - 10)
+                    cv2.putText(annotated_frame, f"{text} ({conf:.2f})", text_pos,
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            except Exception as draw_error:
+                continue  # Skip problematic detections
+        
+        # Extract text
+        detected_text = ""
+        for detection in ocr_results:
+            if len(detection) >= 3 and detection[2] > ocr_settings.get('confidence_threshold', 0.5):
+                detected_text += f"{detection[1]} [Conf: {detection[2]:.2f}]\n"
+        
+        # Clean text
+        cleaned_text = clean_ocr_text(detected_text)
+        
+        # Convert back to PIL
         result_image = Image.fromarray(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB))
         return result_image, detected_text, cleaned_text, ocr_results
-    else:
-        return annotated_frame, detected_text, cleaned_text, ocr_results
-
-class CameraHandler:
-    """Handle camera operations for live detection"""
-    
-    def __init__(self):
-        self.cap = None
-        self.is_running = False
-        self.frame_queue = queue.Queue(maxsize=5)
-        self.result_queue = queue.Queue(maxsize=5)
         
-    def initialize_camera(self, camera_index=0):
-        """Initialize camera with given index"""
-        try:
-            if self.cap is not None:
-                self.cap.release()
-                
-            self.cap = cv2.VideoCapture(camera_index)
-            if not self.cap.isOpened():
-                return False
-                
-            # Set camera properties
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
-            
-            return True
-        except Exception as e:
-            st.error(f"Camera initialization failed: {e}")
-            return False
-    
-    def start_capture(self):
-        """Start capturing frames"""
-        self.is_running = True
-        
-        def capture_loop():
-            while self.is_running and self.cap is not None:
-                ret, frame = self.cap.read()
-                if ret:
-                    # Add frame to queue (non-blocking)
-                    if not self.frame_queue.full():
-                        self.frame_queue.put(frame)
-                time.sleep(0.033)  # ~30 FPS
-        
-        self.capture_thread = threading.Thread(target=capture_loop)
-        self.capture_thread.daemon = True
-        self.capture_thread.start()
-    
-    def stop_capture(self):
-        """Stop capturing frames"""
-        self.is_running = False
-        if hasattr(self, 'capture_thread'):
-            self.capture_thread.join(timeout=1.0)
-        
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
-    
-    def get_frame(self):
-        """Get latest frame from queue"""
-        try:
-            return self.frame_queue.get_nowait()
-        except queue.Empty:
-            return None
-    
-    def process_and_queue_result(self, frame, model, reader, ocr_settings):
-        """Process frame and queue result"""
-        try:
-            result_frame, detected_text, cleaned_text, ocr_results = process_image(
-                frame, model, reader, ocr_settings
-            )
-            
-            if not self.result_queue.full():
-                self.result_queue.put({
-                    'frame': result_frame,
-                    'text': detected_text,
-                    'cleaned_text': cleaned_text,
-                    'ocr_results': ocr_results,
-                    'timestamp': time.time()
-                })
-        except Exception as e:
-            print(f"Processing error: {e}")
-    
-    def get_result(self):
-        """Get latest processing result"""
-        try:
-            return self.result_queue.get_nowait()
-        except queue.Empty:
-            return None
-
-# Initialize camera handler
-if 'camera_handler' not in st.session_state:
-    st.session_state.camera_handler = CameraHandler()
+    except Exception as e:
+        st.error(f"Error processing image: {e}")
+        return image, "", "", []
 
 # Sidebar Settings
 st.sidebar.title("⚙️ Settings")
+
+# System Info
+with st.sidebar.expander("🔍 System Info"):
+    st.write(f"Python: {sys.version.split()[0]}")
+    if 'torch' in sys.modules:
+        st.write(f"PyTorch: {torch.__version__}")
+    if 'cv2' in sys.modules:
+        st.write(f"OpenCV: {cv2.__version__}")
+    st.write(f"Platform: Streamlit Cloud")
 
 # Model loading
 if 'models_loaded' not in st.session_state:
@@ -423,11 +442,14 @@ if 'models_loaded' not in st.session_state:
 if not st.session_state.models_loaded:
     with st.sidebar:
         if st.button("🚀 Load Models", use_container_width=True):
-            model, reader = load_models()
-            st.session_state.yolo_model = model
-            st.session_state.ocr_reader = reader
-            st.session_state.models_loaded = True
-            st.rerun()
+            try:
+                model, reader = load_models()
+                st.session_state.yolo_model = model
+                st.session_state.ocr_reader = reader
+                st.session_state.models_loaded = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to load models: {e}")
 
 if st.session_state.models_loaded:
     st.sidebar.success("✅ Models loaded successfully!")
@@ -436,7 +458,6 @@ if st.session_state.models_loaded:
     st.sidebar.subheader("🔍 OCR Settings")
     
     ocr_settings = {
-        'handwriting_mode': st.sidebar.checkbox("✍️ Handwriting Mode", False),
         'enhance_ocr': st.sidebar.checkbox("🔧 Enhance OCR", True),
         'confidence_threshold': st.sidebar.slider("🎯 Confidence Threshold", 0.1, 1.0, 0.5, 0.1)
     }
@@ -450,42 +471,35 @@ if st.session_state.models_loaded:
     else:
         ocr_settings['preprocessing'] = []
     
-    # Camera Settings
-    st.sidebar.subheader("📹 Camera Settings")
-    camera_index = st.sidebar.selectbox("Camera Index", [0, 1, 2], help="Try different values if camera doesn't work")
+    # Main Content - Image Upload Only (Camera disabled for cloud)
+    st.subheader("📁 Upload Image for Detection")
     
-    # Main Content with Tabs
-    tab1, tab2 = st.tabs(["📁 Upload Image", "📹 Live Camera"])
+    col1, col2 = st.columns([1, 1])
     
-    # Tab 1: Upload Image Processing
-    with tab1:
-        st.markdown('<div class="tab-content">', unsafe_allow_html=True)
+    with col1:
+        st.markdown("### Upload Image")
+        uploaded_file = st.file_uploader(
+            "Choose an image file",
+            type=['png', 'jpg', 'jpeg'],
+            help="Upload an image for object detection and OCR"
+        )
         
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            st.subheader("📁 Upload Image")
-            uploaded_file = st.file_uploader(
-                "Choose an image file",
-                type=['png', 'jpg', 'jpeg'],
-                help="Upload an image for object detection and OCR"
-            )
+        if uploaded_file:
+            # Display original image
+            image = Image.open(uploaded_file)
+            st.image(image, caption="Original Image", use_container_width=True)
             
-            if uploaded_file:
-                # Display original image
-                image = Image.open(uploaded_file)
-                st.image(image, caption="Original Image", use_container_width=True)
+            # File info
+            st.info(f"📊 **File Info:** {uploaded_file.name} | Size: {uploaded_file.size} bytes")
+    
+    with col2:
+        st.markdown("### Results")
+        
+        if uploaded_file:
+            # Process button
+            if st.button("🔍 Process Image", use_container_width=True, type="primary"):
                 
-                # File info
-                st.info(f"📊 **File Info:** {uploaded_file.name} | Size: {uploaded_file.size} bytes")
-        
-        with col2:
-            st.subheader("🎯 Results")
-            
-            if uploaded_file:
-                # Process button
-                if st.button("🔍 Process Image", use_container_width=True, type="primary", key="process_upload"):
-                    
+                with st.spinner("Processing image..."):
                     # Process the image
                     result_image, detected_text, cleaned_text, ocr_results = process_image(
                         image, 
@@ -495,223 +509,68 @@ if st.session_state.models_loaded:
                     )
                     
                     # Store results in session state
-                    st.session_state.upload_result_image = result_image
-                    st.session_state.upload_detected_text = detected_text
-                    st.session_state.upload_cleaned_text = cleaned_text
-                    st.session_state.upload_ocr_results = ocr_results
-        
-        # Results Display for Upload
-        if hasattr(st.session_state, 'upload_result_image'):
-            st.markdown("---")
-            st.subheader("📊 Analysis Results")
-            
-            # Results in columns
-            col1, col2 = st.columns([1, 1])
-            
-            with col1:
-                st.markdown("### 🖼️ Processed Image")
-                st.image(st.session_state.upload_result_image, use_container_width=True)
-                
-                # Download button for processed image
-                img_buffer = io.BytesIO()
-                st.session_state.upload_result_image.save(img_buffer, format='PNG')
-                img_buffer.seek(0)
-                
-                st.download_button(
-                    "📥 Download Processed Image",
-                    data=img_buffer.getvalue(),
-                    file_name="processed_image.png",
-                    mime="image/png"
-                )
-            
-            with col2:
-                st.markdown("### 📝 Detected Text")
-                
-                # Statistics
-                num_detections = len(st.session_state.upload_ocr_results)
-                high_conf_detections = sum(1 for det in st.session_state.upload_ocr_results 
-                                         if det[2] > ocr_settings['confidence_threshold'])
-                
-                col_stat1, col_stat2 = st.columns(2)
-                with col_stat1:
-                    st.metric("Total Detections", num_detections)
-                with col_stat2:
-                    st.metric("High Confidence", high_conf_detections)
-                
-                # Raw OCR text
-                if st.session_state.upload_detected_text.strip():
-                    st.markdown("**Original OCR Output:**")
-                    st.text_area("", st.session_state.upload_detected_text, height=150, key="upload_raw_text")
-                    
-                    # Cleaned text
-                    if st.session_state.upload_cleaned_text.strip():
-                        st.markdown("**Cleaned Text:**")
-                        st.text_area("", st.session_state.upload_cleaned_text, height=100, key="upload_cleaned_text")
-                    
-                    # Download text
-                    st.download_button(
-                        "📥 Download Text",
-                        data=st.session_state.upload_cleaned_text,
-                        file_name="extracted_text.txt",
-                        mime="text/plain"
-                    )
-                else:
-                    st.info("No text detected in the image.")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+                    st.session_state.result_image = result_image
+                    st.session_state.detected_text = detected_text
+                    st.session_state.cleaned_text = cleaned_text
+                    st.session_state.ocr_results = ocr_results
     
-    # Tab 2: Live Camera Processing
-    with tab2:
-        st.markdown('<div class="tab-content">', unsafe_allow_html=True)
+    # Results Display
+    if hasattr(st.session_state, 'result_image'):
+        st.markdown("---")
+        st.subheader("📊 Analysis Results")
         
-        col1, col2 = st.columns([2, 1])
+        # Results in columns
+        col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.subheader("📹 Live Camera Feed")
+            st.markdown("### 🖼️ Processed Image")
+            st.image(st.session_state.result_image, use_container_width=True)
             
-            # Camera controls
-            col_btn1, col_btn2, col_btn3 = st.columns(3)
+            # Download button for processed image
+            img_buffer = io.BytesIO()
+            st.session_state.result_image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
             
-            with col_btn1:
-                if st.button("▶️ Start Camera", use_container_width=True, type="primary"):
-                    if st.session_state.camera_handler.initialize_camera(camera_index):
-                        st.session_state.camera_handler.start_capture()
-                        st.session_state.camera_active = True
-                        st.success("Camera started!")
-                        st.rerun()
-                    else:
-                        st.error("Failed to initialize camera!")
-            
-            with col_btn2:
-                if st.button("⏸️ Stop Camera", use_container_width=True):
-                    st.session_state.camera_handler.stop_capture()
-                    st.session_state.camera_active = False
-                    st.success("Camera stopped!")
-                    st.rerun()
-            
-            with col_btn3:
-                save_frame = st.button("📷 Save Frame", use_container_width=True)
-            
-            # Camera display
-            camera_placeholder = st.empty()
-            
-            # Initialize camera state
-            if 'camera_active' not in st.session_state:
-                st.session_state.camera_active = False
-            
-            # Live camera processing
-            if st.session_state.camera_active:
-                # Processing settings
-                process_every_n_frames = st.slider("Process every N frames (for performance)", 1, 10, 3)
-                frame_counter = 0
-                
-                while st.session_state.camera_active:
-                    frame = st.session_state.camera_handler.get_frame()
-                    
-                    if frame is not None:
-                        frame_counter += 1
-                        
-                        # Process frame periodically
-                        if frame_counter % process_every_n_frames == 0:
-                            st.session_state.camera_handler.process_and_queue_result(
-                                frame, 
-                                st.session_state.yolo_model, 
-                                st.session_state.ocr_reader, 
-                                ocr_settings
-                            )
-                        
-                        # Get processed result
-                        result = st.session_state.camera_handler.get_result()
-                        if result is not None:
-                            display_frame = result['frame']
-                            st.session_state.current_camera_result = result
-                        else:
-                            # Show raw frame if no processed result available
-                            display_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        
-                        # Convert to PIL for display
-                        if isinstance(display_frame, np.ndarray):
-                            display_image = Image.fromarray(display_frame)
-                        else:
-                            display_image = display_frame
-                        
-                        # Display in Streamlit
-                        camera_placeholder.image(display_image, channels="RGB", use_container_width=True)
-                        
-                        # Save frame if requested
-                        if save_frame and hasattr(st.session_state, 'current_camera_result'):
-                            timestamp = int(time.time())
-                            filename = f"camera_capture_{timestamp}.jpg"
-                            
-                            # Save the processed frame
-                            if isinstance(st.session_state.current_camera_result['frame'], Image.Image):
-                                st.session_state.current_camera_result['frame'].save(filename)
-                            else:
-                                cv2.imwrite(filename, st.session_state.current_camera_result['frame'])
-                            
-                            st.success(f"Saved frame as {filename}")
-                        
-                        time.sleep(0.1)  # Control frame rate
-                    else:
-                        time.sleep(0.1)
-            
-            else:
-                camera_placeholder.markdown("""
-                <div class="camera-container">
-                    <div style="text-align: center; padding: 100px 0;">
-                        <h3>📹 Camera Not Active</h3>
-                        <p>Click "Start Camera" to begin live detection</p>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+            st.download_button(
+                "📥 Download Processed Image",
+                data=img_buffer.getvalue(),
+                file_name="processed_image.png",
+                mime="image/png"
+            )
         
         with col2:
-            st.subheader("📊 Live Detection Results")
+            st.markdown("### 📝 Detected Text")
             
-            # Real-time stats
-            if hasattr(st.session_state, 'current_camera_result'):
-                result = st.session_state.current_camera_result
+            # Statistics
+            num_detections = len(st.session_state.ocr_results)
+            high_conf_detections = sum(1 for det in st.session_state.ocr_results 
+                                     if len(det) >= 3 and det[2] > ocr_settings['confidence_threshold'])
+            
+            col_stat1, col_stat2 = st.columns(2)
+            with col_stat1:
+                st.metric("Total Detections", num_detections)
+            with col_stat2:
+                st.metric("High Confidence", high_conf_detections)
+            
+            # Raw OCR text
+            if st.session_state.detected_text.strip():
+                st.markdown("**Original OCR Output:**")
+                st.text_area("", st.session_state.detected_text, height=150, key="raw_text")
                 
-                # Stats
-                num_detections = len(result['ocr_results'])
-                high_conf_detections = sum(1 for det in result['ocr_results'] 
-                                         if det[2] > ocr_settings['confidence_threshold'])
+                # Cleaned text
+                if st.session_state.cleaned_text.strip():
+                    st.markdown("**Cleaned Text:**")
+                    st.text_area("", st.session_state.cleaned_text, height=100, key="cleaned_text")
                 
-                st.metric("🎯 Total Detections", num_detections)
-                st.metric("✅ High Confidence", high_conf_detections)
-                st.metric("⏰ Last Update", f"{time.time() - result['timestamp']:.1f}s ago")
-                
-                # Detected text
-                if result['text'].strip():
-                    st.markdown("**📝 Detected Text:**")
-                    st.text_area("Live OCR Results", result['text'], height=200, key="live_ocr_text")
-                    
-                    if result['cleaned_text'].strip():
-                        st.markdown("**🧹 Cleaned Text:**")
-                        st.text_area("Cleaned Results", result['cleaned_text'], height=100, key="live_cleaned_text")
-                else:
-                    st.info("No text detected in current frame")
-                
-                # Performance info
-                st.markdown("---")
-                st.markdown("**🚀 Performance:**")
-                fps = 1.0 / max(0.1, time.time() - result['timestamp'])
-                st.text(f"Processing FPS: ~{fps:.1f}")
-                
+                # Download text
+                st.download_button(
+                    "📥 Download Text",
+                    data=st.session_state.cleaned_text,
+                    file_name="extracted_text.txt",
+                    mime="text/plain"
+                )
             else:
-                st.info("Start camera to see live detection results")
-                
-                # Instructions
-                st.markdown("""
-                **📋 Instructions:**
-                1. Click "Start Camera" to begin
-                2. Point camera at objects/text
-                3. Adjust settings in sidebar
-                4. Use "Save Frame" to capture results
-                5. Click "Stop Camera" when done
-                """)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.info("No text detected in the image.")
 
 else:
     # Landing page when models aren't loaded
@@ -722,41 +581,37 @@ else:
     - **YOLOv8**: State-of-the-art object detection
     - **EasyOCR**: Accurate text recognition
     - **Smart Processing**: Automatic text cleaning and correction
-    - **Live Camera**: Real-time detection from webcam
     
-    ### Features:
+    ### 🌟 Features:
     - 📁 Upload any image (PNG, JPG, JPEG)
-    - 📹 Live camera detection with real-time processing
     - 🔍 Detect objects and text simultaneously
-    - ✍️ Handwriting mode for better handwritten text recognition
     - 🔧 Advanced OCR preprocessing options
     - 📥 Download processed results
-    - 📷 Save camera frames with detections
     
-    ### Getting Started:
+    ### 🚀 Getting Started:
     1. Click "🚀 Load Models" in the sidebar
-    2. Choose between "Upload Image" or "Live Camera" tabs
+    2. Upload an image using the file uploader
     3. Adjust settings as needed
-    4. Start processing!
+    4. Click "🔍 Process Image"
+    5. Download your results!
+    
+    ### ⚠️ Note:
+    - Live camera is disabled on Streamlit Cloud
+    - First model load may take a few minutes
+    - Use high-quality images for best results
     
     **Click the "Load Models" button in the sidebar to begin!**
     """)
     
-    # Demo image
-    st.image("https://via.placeholder.com/800x400/667eea/ffffff?text=YOLO+%2B+OCR+Detection+System", 
+    # Show example
+    st.image("https://via.placeholder.com/800x300/667eea/ffffff?text=YOLO+%2B+OCR+Detection+System", 
              caption="Sample detection visualization")
-
-# Cleanup on app exit
-if hasattr(st.session_state, 'camera_handler'):
-    # This will run when the session ends
-    import atexit
-    atexit.register(st.session_state.camera_handler.stop_capture)
 
 # Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 1rem;'>
     Made with ❤️ using Streamlit | YOLO + EasyOCR<br>
-    <small>Perfect for testing object detection and text recognition on images and live camera</small>
+    <small>✅ Optimized for Streamlit Cloud deployment</small>
 </div>
 """, unsafe_allow_html=True)
