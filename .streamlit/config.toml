@@ -1,6 +1,3 @@
-# .streamlit/config.toml - Keep your existing config or use this
-
-```toml
 [theme]
 primaryColor = "#667eea"
 backgroundColor = "#FFFFFF"
@@ -15,4 +12,3 @@ maxUploadSize = 200
 
 [browser]
 gatherUsageStats = false
-```
