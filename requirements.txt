@@ -1,18 +1,24 @@
-# Streamlit Cloud Compatible Requirements
-# Uses available PyTorch versions and proper syntax
+# Python 3.13.6 Compatible Requirements for Streamlit Cloud
+# Based on actual available versions from deployment logs
 
 streamlit>=1.28.0
 opencv-python-headless==4.8.1.78
 numpy>=1.24.0,<2.0.0
 Pillow>=10.0.0
 
-# PyTorch - Use available versions (CPU-only)
-torch==2.5.1
-torchvision==0.20.1
-torchaudio==2.5.1
+# PyTorch - Using the latest available versions for Python 3.13.6
+# From your logs: available versions are 2.5.0, 2.5.1, 2.6.0, 2.7.0, 2.7.1, 2.8.0
+torch==2.6.0
 
-# YOLO - Compatible with newer PyTorch
-ultralytics>=8.1.0
+# TorchVision - Using available version for Python 3.13.6  
+# From your logs: available versions are 0.21.0, 0.22.0, 0.22.1, 0.23.0
+torchvision==0.21.0
+
+# TorchAudio - matching version
+torchaudio==2.6.0
+
+# YOLO - Use latest version compatible with newer PyTorch
+ultralytics>=8.3.0
 
 # OCR Dependencies
 easyocr>=1.7.0
@@ -25,4 +31,3 @@ Shapely>=1.8.0
 
 # Utilities
 urllib3>=1.26.0,<2.0.0
-pathlib2>=2.3.0
