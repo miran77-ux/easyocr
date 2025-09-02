@@ -10,10 +10,9 @@ os.environ['PYTHONWARNINGS'] = 'ignore'
 # Set environment variables for better compatibility
 os.environ['TORCH_HOME'] = '/tmp/torch'
 os.environ['HF_HUB_CACHE'] = '/tmp/hf_cache'
-os.environ['OPENCV_VIDEOIO_PRIORITY_MSMF'] = '0'
 os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Force CPU-only
 
-# Page config (must be first Streamlit command)
+# Page config
 st.set_page_config(
     page_title="YOLO + OCR Detection",
     page_icon="🔍",
@@ -21,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Import check and error handling
+# Import check
 import_errors = []
 
 try:
@@ -34,14 +33,13 @@ except ImportError as e:
 try:
     import numpy as np
     import easyocr
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image
     import torch
     import urllib.request
     from pathlib import Path
     import tempfile
     import time
     import io
-    import base64
     core_imports_available = True
 except ImportError as e:
     core_imports_available = False
@@ -54,37 +52,33 @@ except ImportError as e:
     yolo_available = False
     import_errors.append(f"YOLO: {e}")
 
-# Check if all required components are available
+# Check imports
 if not (cv2_available and core_imports_available and yolo_available):
-    st.error("## Import Error")
-    st.error("Some required libraries failed to import:")
+    st.error("Import Error")
+    st.error("Some libraries failed to import:")
     
     for error in import_errors:
         st.error(f"• {error}")
     
     st.markdown("""
-    ### Solutions for Streamlit Cloud:
+    ### Use these exact versions in requirements.txt:
     
-    1. **Update requirements.txt** with these exact versions:
     ```
-    streamlit>=1.28.0
-    torch==2.5.1
-    torchvision==0.20.1
-    ultralytics>=8.1.0
+    torch==2.6.0
+    torchvision==0.21.0
+    ultralytics>=8.3.0
     opencv-python-headless==4.8.1.78
+    streamlit>=1.28.0
+    easyocr>=1.7.0
+    numpy>=1.24.0,<2.0.0
+    Pillow>=10.0.0
     ```
     
-    2. **The issue**: PyTorch 2.1.0 is not available on Python 3.13
-    
-    3. **Solution**: Use PyTorch 2.5.1 which is available
-    
-    4. **Restart the app** after making changes
+    These are the versions available for Python 3.13.6 on Streamlit Cloud.
     """)
-    
-    st.info("Use the updated requirements.txt provided above.")
     st.stop()
 
-# Monkey-patch for Pillow >= 10.0
+# Monkey-patch for Pillow
 if not hasattr(Image, 'ANTIALIAS'):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
 
@@ -99,43 +93,34 @@ st.markdown("""
         border-radius: 10px;
         margin-bottom: 2rem;
     }
-    .stButton > button {
-        background: linear-gradient(45deg, #667eea, #764ba2);
-        color: white;
-        border: none;
-        border-radius: 5px;
-        padding: 0.5rem 1rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # Header
 st.markdown("""
 <div class="main-header">
-    <h1>🔍 YOLO + OCR Detection System</h1>
-    <p>Optimized for Streamlit Cloud - Upload images for detection</p>
-    <small>CPU-optimized for cloud deployment</small>
+    <h1>YOLO + OCR Detection System</h1>
+    <p>Streamlit Cloud - Upload images for detection</p>
 </div>
 """, unsafe_allow_html=True)
 
 def setup_pytorch_compatibility():
-    """Enhanced PyTorch compatibility for newer versions"""
+    """Setup PyTorch 2.6.0 compatibility"""
     try:
         torch_version = torch.__version__
         st.info(f"PyTorch version: {torch_version}")
         
-        # For PyTorch 2.5+, the safe globals approach is different
-        if hasattr(torch, 'serialization'):
+        # For PyTorch 2.6+, handle safe globals differently
+        if hasattr(torch, 'serialization') and hasattr(torch.serialization, 'add_safe_globals'):
             try:
-                # Try to import and configure safe globals
                 from torch.serialization import add_safe_globals
                 
                 safe_classes = []
                 
-                # Add essential classes
+                # Essential classes
                 try:
-                    from ultralytics.nn.tasks import DetectionModel
-                    safe_classes.append(DetectionModel)
+                    from collections import OrderedDict
+                    safe_classes.append(OrderedDict)
                 except ImportError:
                     pass
                 
@@ -145,17 +130,16 @@ def setup_pytorch_compatibility():
                 except ImportError:
                     pass
                 
+                # Ultralytics classes
                 try:
-                    from collections import OrderedDict
-                    safe_classes.append(OrderedDict)
+                    from ultralytics.nn.tasks import DetectionModel
+                    safe_classes.append(DetectionModel)
                 except ImportError:
                     pass
                 
-                # Add common ultralytics classes
                 try:
                     import ultralytics.nn.modules as ul_modules
-                    module_names = ['Conv', 'C2f', 'SPPF', 'Bottleneck', 'DFL', 'Detect', 'Segment']
-                    for name in module_names:
+                    for name in ['Conv', 'C2f', 'SPPF', 'Bottleneck', 'DFL', 'Detect']:
                         if hasattr(ul_modules, name):
                             safe_classes.append(getattr(ul_modules, name))
                 except ImportError:
@@ -176,7 +160,7 @@ def setup_pytorch_compatibility():
 
 @st.cache_resource
 def load_models():
-    """Load models with PyTorch 2.5+ compatibility"""
+    """Load models with PyTorch 2.6.0 support"""
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -187,7 +171,7 @@ def load_models():
         progress_bar.progress(10)
         
         if not setup_pytorch_compatibility():
-            st.warning("Compatibility issues detected, but continuing...")
+            st.warning("Compatibility issues detected, continuing anyway...")
         
         # Download YOLO model
         status_text.text("Checking YOLO model...")
@@ -195,85 +179,47 @@ def load_models():
         
         model_path = "yolov8n.pt"
         if not Path(model_path).exists():
-            status_text.text("Downloading YOLO model (this may take a moment)...")
+            status_text.text("Downloading YOLO model...")
             progress_bar.progress(40)
             
-            try:
-                urllib.request.urlretrieve(
-                    "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
-                    model_path
-                )
-                st.success("YOLO model downloaded successfully")
-            except Exception as download_error:
-                st.error(f"Model download failed: {download_error}")
-                raise download_error
+            urllib.request.urlretrieve(
+                "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
+                model_path
+            )
+            st.success("YOLO model downloaded")
         
-        # Load YOLO model with PyTorch 2.5+ approach
+        # Load YOLO model
         status_text.text("Loading YOLO model...")
         progress_bar.progress(60)
         
         model = None
         
-        # Strategy 1: Standard loading
-        try:
-            model = YOLO(model_path)
-            st.info("Success with standard loading")
-        except Exception as e:
-            st.warning(f"Standard loading failed: {str(e)[:100]}...")
-            
-            # Strategy 2: Force weights_only=False for PyTorch 2.5+
+        # Try multiple loading strategies
+        strategies = [
+            ("Standard loading", lambda: YOLO(model_path)),
+            ("Weights bypass", lambda: load_with_weights_bypass(model_path)),
+            ("Fresh model", lambda: load_fresh_model()),
+        ]
+        
+        for strategy_name, load_func in strategies:
             try:
-                # Monkey patch approach for PyTorch 2.5+
-                original_load = torch.load
-                
-                def patched_load(*args, **kwargs):
-                    # Force weights_only=False for compatibility
-                    kwargs['weights_only'] = False
-                    return original_load(*args, **kwargs)
-                
-                torch.load = patched_load
-                try:
-                    model = YOLO(model_path)
-                    st.info("Success with weights_only bypass")
-                finally:
-                    torch.load = original_load
-                    
-            except Exception as strategy2_error:
-                st.warning(f"Weights bypass failed: {str(strategy2_error)[:100]}...")
-                
-                # Strategy 3: Fresh download with bypass
-                try:
-                    temp_path = os.path.join(tempfile.gettempdir(), "yolov8n_fresh.pt")
-                    urllib.request.urlretrieve(
-                        "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
-                        temp_path
-                    )
-                    
-                    torch.load = patched_load
-                    try:
-                        model = YOLO(temp_path)
-                        st.info("Success with fresh model")
-                    finally:
-                        torch.load = original_load
-                        
-                except Exception as strategy3_error:
-                    st.error(f"All strategies failed: {strategy3_error}")
-                    raise strategy3_error
+                st.info(f"Trying: {strategy_name}")
+                model = load_func()
+                st.success(f"Success with: {strategy_name}")
+                break
+            except Exception as e:
+                st.warning(f"{strategy_name} failed: {str(e)[:100]}...")
+                continue
         
         if model is None:
-            raise Exception("Failed to load YOLO model with all strategies")
+            raise Exception("All YOLO loading strategies failed")
         
         # Load OCR model
         status_text.text("Loading OCR model...")
         progress_bar.progress(80)
         
-        try:
-            # Use CPU-only mode for cloud deployment
-            reader = easyocr.Reader(['en'], verbose=False, gpu=False)
-            st.success("OCR model loaded successfully")
-        except Exception as ocr_error:
-            st.error(f"OCR loading failed: {ocr_error}")
-            raise ocr_error
+        reader = easyocr.Reader(['en'], verbose=False, gpu=False)
+        st.success("OCR model loaded")
         
         progress_bar.progress(100)
         status_text.text("All models loaded successfully!")
@@ -288,34 +234,40 @@ def load_models():
         progress_bar.empty()
         status_text.empty()
         
-        error_msg = str(e)
-        st.error(f"Model loading failed: {error_msg}")
+        st.error(f"Model loading failed: {e}")
         
-        # Provide specific troubleshooting
-        if "weights_only" in error_msg.lower() or "safe" in error_msg.lower():
+        # Provide troubleshooting
+        if "weights_only" in str(e).lower() or "safe" in str(e).lower():
             st.markdown("""
             ### PyTorch Loading Issue
-            This is a PyTorch 2.5+ compatibility issue. Solutions:
-            1. The app should handle this automatically
-            2. If problems persist, try restarting the app
-            3. Check that requirements.txt uses PyTorch 2.5.1
-            """)
-        elif "download" in error_msg.lower():
-            st.markdown("""
-            ### Model Download Issue
-            1. Check internet connectivity
-            2. Try refreshing the app
-            3. Model downloads automatically on first run
-            """)
-        else:
-            st.markdown("""
-            ### General Troubleshooting
-            1. Ensure requirements.txt uses compatible versions
-            2. Try restarting the application
-            3. Check Streamlit Cloud logs for details
+            This is a PyTorch 2.6+ loading issue. The app should handle this automatically.
+            If problems persist, try restarting the app.
             """)
         
         raise e
+
+def load_with_weights_bypass(model_path):
+    """Load with weights_only=False bypass"""
+    original_load = torch.load
+    
+    def patched_load(*args, **kwargs):
+        kwargs['weights_only'] = False
+        return original_load(*args, **kwargs)
+    
+    torch.load = patched_load
+    try:
+        return YOLO(model_path)
+    finally:
+        torch.load = original_load
+
+def load_fresh_model():
+    """Download and load fresh model"""
+    temp_path = os.path.join(tempfile.gettempdir(), "yolov8n_fresh.pt")
+    urllib.request.urlretrieve(
+        "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
+        temp_path
+    )
+    return load_with_weights_bypass(temp_path)
 
 def process_image(image, model, reader, ocr_settings):
     """Process image with YOLO and OCR"""
@@ -328,19 +280,17 @@ def process_image(image, model, reader, ocr_settings):
             img_cv = image
         
         # YOLO Detection
-        with st.spinner("Running object detection..."):
-            results = model(img_cv)
-            annotated_frame = results[0].plot()
+        results = model(img_cv)
+        annotated_frame = results[0].plot()
         
-        # OCR Detection
-        with st.spinner("Extracting text..."):
-            try:
-                ocr_results = reader.readtext(img_cv, paragraph=False)
-            except Exception as ocr_error:
-                st.warning(f"OCR processing warning: {ocr_error}")
-                ocr_results = []
+        # OCR Detection  
+        try:
+            ocr_results = reader.readtext(img_cv, paragraph=False)
+        except Exception as ocr_error:
+            st.warning(f"OCR warning: {ocr_error}")
+            ocr_results = []
         
-        # Draw OCR results on image
+        # Draw OCR results
         for detection in ocr_results:
             try:
                 if len(detection) >= 3:
@@ -349,17 +299,14 @@ def process_image(image, model, reader, ocr_settings):
                     conf = detection[2]
                     
                     if conf > ocr_settings.get('confidence_threshold', 0.5):
-                        # Draw bounding box
                         cv2.polylines(annotated_frame, [box], True, (0, 255, 0), 2)
-                        
-                        # Add text label
                         text_pos = (box[0][0], box[0][1] - 10)
                         cv2.putText(annotated_frame, f"{text} ({conf:.2f})", text_pos,
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             except Exception:
-                continue  # Skip problematic detections
+                continue
         
-        # Extract detected text
+        # Extract text
         detected_text = ""
         for detection in ocr_results:
             if len(detection) >= 3 and detection[2] > ocr_settings.get('confidence_threshold', 0.5):
@@ -383,7 +330,6 @@ with st.sidebar.expander("System Info"):
         st.write(f"PyTorch: {torch.__version__}")
     if 'cv2' in sys.modules:
         st.write(f"OpenCV: {cv2.__version__}")
-    st.write("Platform: Streamlit Cloud")
 
 # Model loading
 if 'models_loaded' not in st.session_state:
@@ -391,7 +337,7 @@ if 'models_loaded' not in st.session_state:
 
 if not st.session_state.models_loaded:
     with st.sidebar:
-        if st.button("🚀 Load Models", use_container_width=True, type="primary"):
+        if st.button("Load Models", use_container_width=True, type="primary"):
             try:
                 model, reader = load_models()
                 st.session_state.yolo_model = model
@@ -431,7 +377,6 @@ if st.session_state.models_loaded:
         st.markdown("### Results")
         
         if uploaded_file and st.button("Process Image", use_container_width=True, type="primary"):
-            # Process the image
             result_image, detected_text, ocr_results = process_image(
                 image, 
                 st.session_state.yolo_model, 
@@ -439,7 +384,6 @@ if st.session_state.models_loaded:
                 ocr_settings
             )
             
-            # Store results
             st.session_state.result_image = result_image
             st.session_state.detected_text = detected_text
             st.session_state.ocr_results = ocr_results
@@ -455,7 +399,6 @@ if st.session_state.models_loaded:
             st.markdown("### Processed Image")
             st.image(st.session_state.result_image, use_container_width=True)
             
-            # Download processed image
             img_buffer = io.BytesIO()
             st.session_state.result_image.save(img_buffer, format='PNG')
             img_buffer.seek(0)
@@ -470,7 +413,6 @@ if st.session_state.models_loaded:
         with col2:
             st.markdown("### Detected Text")
             
-            # Statistics
             num_detections = len(st.session_state.ocr_results)
             high_conf = sum(1 for det in st.session_state.ocr_results 
                            if len(det) >= 3 and det[2] > ocr_settings['confidence_threshold'])
@@ -481,7 +423,6 @@ if st.session_state.models_loaded:
             with col_stat2:
                 st.metric("High Confidence", high_conf)
             
-            # Display text
             if st.session_state.detected_text.strip():
                 st.text_area("Detected Text", st.session_state.detected_text, height=200)
                 
@@ -499,35 +440,31 @@ else:
     st.markdown("""
     ## Welcome to YOLO + OCR Detection System
     
-    **Optimized for Streamlit Cloud deployment**
+    **Optimized for Streamlit Cloud**
     
     ### Features:
     - Upload images for analysis
     - Object detection with YOLOv8
     - Text recognition with EasyOCR
     - CPU-optimized for cloud deployment
-    - Download processed results
     
     ### Getting Started:
-    1. Click "🚀 Load Models" in the sidebar
-    2. Upload an image using the file uploader
+    1. Click "Load Models" in the sidebar
+    2. Upload an image
     3. Click "Process Image"
-    4. Download your results!
+    4. Download results
     
-    ### Cloud Deployment Notes:
-    - First model load may take 2-3 minutes
+    ### Notes:
+    - First model load takes 2-3 minutes
     - Models are cached after initial load
-    - Camera features disabled for cloud deployment
     - Optimized for CPU processing
     
     **Click "Load Models" in the sidebar to begin!**
     """)
 
-# Footer
 st.markdown("---")
 st.markdown("""
-<div style='text-align: center; color: #666; padding: 1rem;'>
-    Made with Streamlit | YOLO + EasyOCR<br>
-    <small>Optimized for Streamlit Cloud deployment</small>
+<div style='text-align: center; color: #666;'>
+    Made with Streamlit | YOLO + EasyOCR
 </div>
 """, unsafe_allow_html=True)
