@@ -108,8 +108,13 @@ export class YOLODetector {
                 [boxes, scores, classes] = predictions;
             } else {
                 // Single tensor output
-                const predArray = await predictions.data();
-                return this.parseSingleTensorOutput(predArray, originalWidth, originalHeight);
+                if (predictions && typeof predictions.data === 'function') {
+                    const predArray = await predictions.data();
+                    return this.parseSingleTensorOutput(predArray, originalWidth, originalHeight);
+                } else {
+                    console.warn('Unexpected prediction format, cannot extract data');
+                    return [];
+                }
             }
 
             const boxesData = await boxes.data();
