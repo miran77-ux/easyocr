@@ -55,9 +55,17 @@ export class YOLODetector {
             
             // Cleanup
             tensor.dispose();
-            if (Array.isArray(predictions)) {
+            if (predictions.detection_boxes && predictions.detection_scores && predictions.detection_classes) {
+                // Dispose named tensors for SSD MobileNet v2
+                predictions.detection_boxes.dispose();
+                predictions.detection_scores.dispose();
+                predictions.detection_classes.dispose();
+                if (predictions.num_detections) {
+                    predictions.num_detections.dispose();
+                }
+            } else if (Array.isArray(predictions)) {
                 predictions.forEach(p => p.dispose());
-            } else {
+            } else if (predictions.dispose) {
                 predictions.dispose();
             }
             
@@ -87,11 +95,16 @@ export class YOLODetector {
                 return [];
             }
 
-            // Handle different model output formats
+            // Handle SSD MobileNet v2 object output format
             let boxes, scores, classes;
             
-            if (Array.isArray(predictions)) {
-                // SSD MobileNet format
+            if (predictions.detection_boxes && predictions.detection_scores && predictions.detection_classes) {
+                // SSD MobileNet v2 object format with named tensors
+                boxes = predictions.detection_boxes;
+                scores = predictions.detection_scores;
+                classes = predictions.detection_classes;
+            } else if (Array.isArray(predictions)) {
+                // Array format
                 [boxes, scores, classes] = predictions;
             } else {
                 // Single tensor output
