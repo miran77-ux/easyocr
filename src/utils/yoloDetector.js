@@ -81,6 +81,12 @@ export class YOLODetector {
 
     async processDetections(predictions, originalWidth, originalHeight) {
         try {
+            // Check if predictions is undefined or null
+            if (!predictions) {
+                console.warn('Predictions is undefined or null, returning empty array');
+                return [];
+            }
+
             // Handle different model output formats
             let boxes, scores, classes;
             
