@@ -28,7 +28,7 @@ export class YOLODetector {
             console.log('YOLO model loaded successfully');
             
             // Warm up the model
-            const dummyInput = tf.zeros([1, this.inputSize, this.inputSize, 3]);
+            const dummyInput = tf.zeros([1, this.inputSize, this.inputSize, 3], 'int32');
             await this.model.predict(dummyInput);
             dummyInput.dispose();
             
@@ -73,8 +73,7 @@ export class YOLODetector {
         // Convert canvas to tensor
         const tensor = tf.browser.fromPixels(canvas)
             .resizeNearestNeighbor([this.inputSize, this.inputSize])
-            .toFloat()
-            .div(255.0)
+            .toInt()
             .expandDims(0);
         
         return tensor;
