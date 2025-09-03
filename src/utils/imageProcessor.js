@@ -43,7 +43,7 @@ export class ImageProcessor {
             processedImage,
             detectedText: this.extractText(ocrResults, settings.confidenceThreshold),
             objectCount: objectDetections.length,
-            textCount: ocrResults.data.words.filter(word => 
+            textCount: (ocrResults.data && ocrResults.data.words ? ocrResults.data.words : []).filter(word => 
                 word.confidence > settings.confidenceThreshold * 100
             ).length,
             objectDetections,
