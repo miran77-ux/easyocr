@@ -1,54 +1,45 @@
-import { ModelLoader } from './utils/modelLoader.js';
-import { ImageProcessor } from './utils/imageProcessor.js';
-import { CameraHandler } from './utils/cameraHandler.js';
-import { UIController } from './utils/uiController.js';
+import { YOLODetector } from './utils/yoloDetector.js';
+import { OCRProcessor } from './utils/ocrProcessor.js';
+import { CameraManager } from './utils/cameraManager.js';
 
 class YOLOOCRApp {
     constructor() {
-        this.modelLoader = new ModelLoader();
-        this.imageProcessor = new ImageProcessor();
-        this.cameraHandler = new CameraHandler();
-        this.uiController = new UIController();
+        this.yoloDetector = new YOLODetector();
+        this.ocrProcessor = new OCRProcessor();
+        this.cameraManager = new CameraManager();
         
         this.modelsLoaded = false;
         this.currentImage = null;
+        this.isProcessing = false;
     }
 
     async init() {
-        try {
-            this.setupEventListeners();
-            await this.loadModels();
-            this.uiController.hideLoading();
-            this.modelsLoaded = true;
-        } catch (error) {
-            console.error('Initialization failed:', error);
-            this.uiController.showError('Failed to initialize application: ' + error.message);
-        }
+        this.setupEventListeners();
+        await this.loadModels();
     }
 
     async loadModels() {
-        this.uiController.showLoading('Loading AI models...');
+        const loading = document.getElementById('loading');
+        const loadingText = document.getElementById('loading-text');
+        
+        loading.classList.remove('hidden');
         
         try {
-            await this.modelLoader.loadYOLOModel();
-            this.uiController.updateLoadingText('Loading OCR model...');
+            loadingText.textContent = 'Loading YOLO model...';
+            await this.yoloDetector.loadModel();
             
-            await this.modelLoader.loadOCRModel();
-            this.uiController.updateLoadingText('Models loaded successfully!');
+            loadingText.textContent = 'Loading OCR model...';
+            await this.ocrProcessor.loadModel();
             
-            // Pass models to processors
-            this.imageProcessor.setModels(
-                this.modelLoader.yoloModel,
-                this.modelLoader.ocrWorker
-            );
-            
-            this.cameraHandler.setModels(
-                this.modelLoader.yoloModel,
-                this.modelLoader.ocrWorker
-            );
+            loadingText.textContent = 'Models loaded successfully!';
+            setTimeout(() => {
+                loading.classList.add('hidden');
+                this.modelsLoaded = true;
+            }, 1000);
             
         } catch (error) {
-            throw new Error(`Model loading failed: ${error.message}`);
+            loadingText.textContent = 'Error loading models: ' + error.message;
+            console.error('Model loading failed:', error);
         }
     }
 
@@ -70,16 +61,16 @@ class YOLOOCRApp {
         // Drag and drop
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
-            uploadArea.classList.add('dragover');
+            uploadArea.style.background = '#e3f2fd';
         });
         
         uploadArea.addEventListener('dragleave', () => {
-            uploadArea.classList.remove('dragover');
+            uploadArea.style.background = '';
         });
         
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
-            uploadArea.classList.remove('dragover');
+            uploadArea.style.background = '';
             const files = e.dataTransfer.files;
             if (files.length > 0) {
                 this.handleFile(files[0]);
@@ -122,19 +113,16 @@ class YOLOOCRApp {
     }
 
     switchTab(tabName) {
-        // Update tab buttons
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.classList.remove('active');
         });
         document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
 
-        // Update tab content
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.remove('active');
         });
         document.getElementById(`${tabName}-tab`).classList.add('active');
 
-        // Stop camera if switching away from camera tab
         if (tabName !== 'camera') {
             this.stopCamera();
         }
@@ -149,7 +137,7 @@ class YOLOOCRApp {
 
     handleFile(file) {
         if (!file.type.startsWith('image/')) {
-            this.uiController.showError('Please select a valid image file');
+            alert('Please select a valid image file');
             return;
         }
 
@@ -170,79 +158,150 @@ class YOLOOCRApp {
         const uploadArea = document.getElementById('upload-area');
         uploadArea.innerHTML = `
             <img src="${img.src}" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
-            <p style="margin-top: 1rem; color: #666;">Image loaded successfully</p>
+            <div style="margin-top: 1rem;">Image loaded successfully</div>
         `;
     }
 
     async processImage() {
-        if (!this.currentImage || !this.modelsLoaded) return;
+        if (!this.currentImage || !this.modelsLoaded || this.isProcessing) return;
 
-        this.uiController.showLoading('Processing image...');
+        this.isProcessing = true;
+        const processBtn = document.getElementById('process-btn');
+        processBtn.textContent = '⏳ Processing...';
+        processBtn.disabled = true;
         
         try {
-            const settings = this.getOCRSettings();
-            const results = await this.imageProcessor.processImage(this.currentImage, settings);
+            const settings = {
+                enhanceOCR: document.getElementById('enhance-ocr').checked,
+                confidenceThreshold: parseFloat(document.getElementById('confidence-slider').value)
+            };
+
+            // Create canvas from image
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = this.currentImage.width;
+            canvas.height = this.currentImage.height;
+            ctx.drawImage(this.currentImage, 0, 0);
+
+            // Run YOLO detection
+            const objectDetections = await this.yoloDetector.detect(canvas);
             
-            this.displayResults(results);
-            this.uiController.hideLoading();
+            // Run OCR
+            const ocrResults = await this.ocrProcessor.extractText(canvas, settings);
+            
+            // Draw results
+            this.drawDetections(ctx, objectDetections, ocrResults, settings);
+            
+            // Display results
+            this.displayResults(canvas, objectDetections, ocrResults, settings);
             
         } catch (error) {
             console.error('Processing failed:', error);
-            this.uiController.showError('Processing failed: ' + error.message);
-            this.uiController.hideLoading();
+            alert('Processing failed: ' + error.message);
+        } finally {
+            this.isProcessing = false;
+            processBtn.textContent = '🔍 Process Image';
+            processBtn.disabled = false;
         }
     }
 
-    getOCRSettings() {
-        return {
-            enhanceOCR: document.getElementById('enhance-ocr').checked,
-            confidenceThreshold: parseFloat(document.getElementById('confidence-slider').value)
-        };
+    drawDetections(ctx, objectDetections, ocrResults, settings) {
+        // Draw object detections (red boxes)
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 3;
+        ctx.font = '16px Arial';
+
+        objectDetections.forEach(detection => {
+            const { x, y, width, height, class: className, confidence } = detection;
+            
+            // Draw bounding box
+            ctx.strokeRect(x, y, width, height);
+            
+            // Draw label
+            const label = `${className} ${(confidence * 100).toFixed(1)}%`;
+            const textWidth = ctx.measureText(label).width;
+            
+            ctx.fillStyle = '#ff0000';
+            ctx.fillRect(x, y - 25, textWidth + 10, 25);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(label, x + 5, y - 5);
+        });
+
+        // Draw OCR detections (green boxes)
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 2;
+
+        ocrResults.words.forEach(word => {
+            if (word.confidence > settings.confidenceThreshold * 100) {
+                const { x0, y0, x1, y1 } = word.bbox;
+                
+                ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+                
+                // Draw confidence
+                ctx.fillStyle = '#00ff00';
+                ctx.fillRect(x0, y0 - 20, 50, 20);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '12px Arial';
+                ctx.fillText(`${word.confidence.toFixed(1)}%`, x0 + 2, y0 - 5);
+            }
+        });
     }
 
-    displayResults(results) {
-        const resultsSection = document.getElementById('results-section');
+    displayResults(canvas, objectDetections, ocrResults, settings) {
+        const resultsSection = document.getElementById('upload-results');
         const resultCanvas = document.getElementById('result-canvas');
         const detectedText = document.getElementById('detected-text');
         const objectCount = document.getElementById('object-count');
         const textCount = document.getElementById('text-count');
 
         // Display processed image
+        resultCanvas.width = canvas.width;
+        resultCanvas.height = canvas.height;
         const ctx = resultCanvas.getContext('2d');
-        resultCanvas.width = results.processedImage.width;
-        resultCanvas.height = results.processedImage.height;
-        ctx.drawImage(results.processedImage, 0, 0);
+        ctx.drawImage(canvas, 0, 0);
 
-        // Display text and stats
-        detectedText.value = results.detectedText;
-        objectCount.textContent = results.objectCount;
-        textCount.textContent = results.textCount;
+        // Extract and display text
+        const extractedText = ocrResults.words
+            .filter(word => word.confidence > settings.confidenceThreshold * 100)
+            .map(word => `${word.text} [${word.confidence.toFixed(1)}%]`)
+            .join('\n');
 
-        // Store results for download
-        this.lastResults = results;
+        detectedText.value = extractedText;
+        objectCount.textContent = objectDetections.length;
+        textCount.textContent = ocrResults.words.filter(word => 
+            word.confidence > settings.confidenceThreshold * 100
+        ).length;
 
-        resultsSection.style.display = 'block';
+        // Store for download
+        this.lastResults = {
+            canvas: resultCanvas,
+            text: extractedText,
+            objectDetections,
+            ocrResults
+        };
+
+        resultsSection.style.display = 'grid';
     }
 
     async startCamera() {
         if (!this.modelsLoaded) {
-            this.uiController.showError('Models not loaded yet');
+            alert('Models not loaded yet');
             return;
         }
 
         try {
-            await this.cameraHandler.startCamera();
+            await this.cameraManager.start();
             this.updateCameraControls(true);
             this.startLiveProcessing();
         } catch (error) {
-            this.uiController.showError('Camera access failed: ' + error.message);
+            alert('Camera access failed: ' + error.message);
         }
     }
 
     stopCamera() {
-        this.cameraHandler.stopCamera();
+        this.cameraManager.stop();
         this.updateCameraControls(false);
-        document.getElementById('live-results').style.display = 'none';
+        document.getElementById('camera-results').style.display = 'none';
     }
 
     updateCameraControls(isActive) {
@@ -251,28 +310,45 @@ class YOLOOCRApp {
         document.getElementById('capture-frame').disabled = !isActive;
     }
 
-    startLiveProcessing() {
-        const liveResults = document.getElementById('live-results');
-        liveResults.style.display = 'block';
+    async startLiveProcessing() {
+        const cameraResults = document.getElementById('camera-results');
+        cameraResults.style.display = 'grid';
 
-        const settings = this.getOCRSettings();
-        let lastProcessTime = 0;
-        const processInterval = 1000; // Process every 1 second
+        let frameCount = 0;
+        let lastTime = performance.now();
 
         const processLoop = async () => {
-            if (!this.cameraHandler.isActive) return;
+            if (!this.cameraManager.isActive) return;
 
-            const now = Date.now();
-            if (now - lastProcessTime > processInterval) {
-                try {
-                    const results = await this.cameraHandler.processCurrentFrame(settings);
-                    if (results) {
-                        this.updateLiveResults(results);
-                        lastProcessTime = now;
+            try {
+                const canvas = this.cameraManager.getCurrentFrame();
+                if (canvas) {
+                    frameCount++;
+                    
+                    // Process every 30 frames (about 1 second at 30fps)
+                    if (frameCount % 30 === 0) {
+                        const settings = {
+                            enhanceOCR: document.getElementById('enhance-ocr').checked,
+                            confidenceThreshold: parseFloat(document.getElementById('confidence-slider').value)
+                        };
+
+                        const objectDetections = await this.yoloDetector.detect(canvas);
+                        const ocrResults = await this.ocrProcessor.extractText(canvas, settings);
+                        
+                        this.updateLiveResults(objectDetections, ocrResults, settings);
                     }
-                } catch (error) {
-                    console.error('Live processing error:', error);
+                    
+                    // Update FPS
+                    const currentTime = performance.now();
+                    if (currentTime - lastTime >= 1000) {
+                        const fps = Math.round(frameCount * 1000 / (currentTime - lastTime));
+                        document.getElementById('fps-counter').textContent = fps;
+                        frameCount = 0;
+                        lastTime = currentTime;
+                    }
                 }
+            } catch (error) {
+                console.error('Live processing error:', error);
             }
 
             requestAnimationFrame(processLoop);
@@ -281,44 +357,41 @@ class YOLOOCRApp {
         processLoop();
     }
 
-    updateLiveResults(results) {
-        document.getElementById('live-object-count').textContent = results.objectCount;
-        document.getElementById('live-text-count').textContent = results.textCount;
-        document.getElementById('live-text').value = results.detectedText;
-        
-        // Update FPS (simplified)
-        const fps = Math.round(1000 / 1000); // Based on process interval
-        document.getElementById('fps-counter').textContent = fps;
+    updateLiveResults(objectDetections, ocrResults, settings) {
+        const extractedText = ocrResults.words
+            .filter(word => word.confidence > settings.confidenceThreshold * 100)
+            .map(word => word.text)
+            .join(' ');
+
+        document.getElementById('live-object-count').textContent = objectDetections.length;
+        document.getElementById('live-text-count').textContent = ocrResults.words.filter(word => 
+            word.confidence > settings.confidenceThreshold * 100
+        ).length;
+        document.getElementById('live-text').value = extractedText;
     }
 
     captureFrame() {
-        if (!this.cameraHandler.isActive) return;
-        
-        const canvas = this.cameraHandler.captureFrame();
+        const canvas = this.cameraManager.captureFrame();
         if (canvas) {
-            // Convert to downloadable image
             canvas.toBlob((blob) => {
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `camera_capture_${Date.now()}.png`;
+                a.download = `capture_${Date.now()}.png`;
                 a.click();
                 URL.revokeObjectURL(url);
             });
-            
-            this.uiController.showSuccess('Frame captured and downloaded!');
         }
     }
 
     downloadImage() {
         if (!this.lastResults) return;
         
-        const canvas = document.getElementById('result-canvas');
-        canvas.toBlob((blob) => {
+        this.lastResults.canvas.toBlob((blob) => {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `processed_image_${Date.now()}.png`;
+            a.download = `processed_${Date.now()}.png`;
             a.click();
             URL.revokeObjectURL(url);
         });
@@ -327,18 +400,17 @@ class YOLOOCRApp {
     downloadText() {
         if (!this.lastResults) return;
         
-        const text = this.lastResults.detectedText;
-        const blob = new Blob([text], { type: 'text/plain' });
+        const blob = new Blob([this.lastResults.text], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `detected_text_${Date.now()}.txt`;
+        a.download = `text_${Date.now()}.txt`;
         a.click();
         URL.revokeObjectURL(url);
     }
 }
 
-// Initialize app when DOM is loaded
+// Initialize app
 document.addEventListener('DOMContentLoaded', () => {
     const app = new YOLOOCRApp();
     app.init();

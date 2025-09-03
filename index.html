@@ -4,14 +4,211 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YOLO + OCR Detection</title>
-    <link rel="stylesheet" href="src/styles/main.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            justify-content: center;
+        }
+
+        .tab-btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            background: #e9ecef;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .tab-btn.active {
+            background: #007bff;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .upload-area {
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            padding: 3rem;
+            text-align: center;
+            cursor: pointer;
+            margin-bottom: 1rem;
+        }
+
+        .upload-area:hover {
+            border-color: #007bff;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            margin: 1rem 0;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .btn:hover:not(:disabled) {
+            background: #0056b3;
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .results {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        .result-section {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 8px;
+        }
+
+        .canvas-container {
+            position: relative;
+            margin: 1rem 0;
+        }
+
+        canvas, video {
+            max-width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 150px;
+            padding: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-family: monospace;
+            resize: vertical;
+        }
+
+        .stats {
+            display: flex;
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+
+        .stat {
+            background: white;
+            padding: 1rem;
+            border-radius: 6px;
+            text-align: center;
+            flex: 1;
+        }
+
+        .loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .loading.hidden {
+            display: none;
+        }
+
+        .loading-content {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #007bff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .results {
+                grid-template-columns: 1fr;
+            }
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+        }
+    </style>
 </head>
 <body>
     <div class="container">
-        <header class="header">
+        <div class="header">
             <h1>🔍 YOLO + OCR Detection</h1>
-            <p>Detect objects and extract text from images or live camera</p>
-        </header>
+            <p>Real object detection and text recognition</p>
+        </div>
 
         <div class="tabs">
             <button class="tab-btn active" data-tab="upload">📁 Upload Image</button>
@@ -19,93 +216,90 @@
         </div>
 
         <div class="tab-content active" id="upload-tab">
-            <div class="upload-section">
-                <div class="upload-area" id="upload-area">
-                    <div class="upload-placeholder">
-                        <div class="upload-icon">📁</div>
-                        <p>Drop an image here or click to select</p>
-                        <input type="file" id="file-input" accept="image/*" hidden>
-                    </div>
-                </div>
-                
-                <div class="controls">
-                    <div class="control-group">
-                        <label>
-                            <input type="checkbox" id="enhance-ocr" checked>
-                            Enhance OCR
-                        </label>
-                    </div>
-                    <div class="control-group">
-                        <label>OCR Confidence: <span id="confidence-value">0.5</span></label>
-                        <input type="range" id="confidence-slider" min="0.1" max="1" step="0.1" value="0.5">
-                    </div>
-                    <button id="process-btn" class="process-btn" disabled>🔍 Process Image</button>
-                </div>
+            <div class="upload-area" id="upload-area">
+                <div>📁 Drop image here or click to select</div>
+                <input type="file" id="file-input" accept="image/*" hidden>
+            </div>
+            
+            <div class="controls">
+                <label>
+                    <input type="checkbox" id="enhance-ocr" checked>
+                    Enhance OCR
+                </label>
+                <label>
+                    OCR Confidence: <span id="confidence-value">0.5</span>
+                    <input type="range" id="confidence-slider" min="0.1" max="1" step="0.1" value="0.5">
+                </label>
+                <button id="process-btn" class="btn" disabled>🔍 Process Image</button>
             </div>
 
-            <div class="results-section" id="results-section" style="display: none;">
-                <div class="result-grid">
-                    <div class="result-item">
-                        <h3>🖼️ Processed Image</h3>
+            <div class="results" id="upload-results" style="display: none;">
+                <div class="result-section">
+                    <h3>🖼️ Processed Image</h3>
+                    <div class="canvas-container">
                         <canvas id="result-canvas"></canvas>
-                        <button id="download-image" class="download-btn">📥 Download Image</button>
                     </div>
-                    <div class="result-item">
-                        <h3>📝 Detected Text</h3>
-                        <div class="stats">
-                            <div class="stat">
-                                <span class="stat-label">Objects:</span>
-                                <span id="object-count">0</span>
-                            </div>
-                            <div class="stat">
-                                <span class="stat-label">Text Regions:</span>
-                                <span id="text-count">0</span>
-                            </div>
+                    <button id="download-image" class="btn">📥 Download</button>
+                </div>
+                <div class="result-section">
+                    <h3>📝 Detection Results</h3>
+                    <div class="stats">
+                        <div class="stat">
+                            <div>Objects</div>
+                            <strong id="object-count">0</strong>
                         </div>
-                        <textarea id="detected-text" readonly placeholder="Detected text will appear here..."></textarea>
-                        <button id="download-text" class="download-btn">📥 Download Text</button>
+                        <div class="stat">
+                            <div>Text Regions</div>
+                            <strong id="text-count">0</strong>
+                        </div>
                     </div>
+                    <textarea id="detected-text" readonly placeholder="Detected text will appear here..."></textarea>
+                    <button id="download-text" class="btn">📥 Download Text</button>
                 </div>
             </div>
         </div>
 
         <div class="tab-content" id="camera-tab">
-            <div class="camera-section">
-                <div class="camera-container">
-                    <video id="camera-video" autoplay muted></video>
-                    <canvas id="camera-canvas" style="display: none;"></canvas>
-                </div>
-                
-                <div class="camera-controls">
-                    <button id="start-camera" class="camera-btn">▶️ Start Camera</button>
-                    <button id="stop-camera" class="camera-btn" disabled>⏸️ Stop Camera</button>
-                    <button id="capture-frame" class="camera-btn" disabled>📷 Capture Frame</button>
-                </div>
+            <div class="canvas-container">
+                <video id="camera-video" autoplay muted style="display: none;"></video>
+                <canvas id="camera-canvas"></canvas>
+            </div>
+            
+            <div class="controls">
+                <button id="start-camera" class="btn">▶️ Start Camera</button>
+                <button id="stop-camera" class="btn" disabled>⏸️ Stop</button>
+                <button id="capture-frame" class="btn" disabled>📷 Capture</button>
+            </div>
 
-                <div class="live-results" id="live-results" style="display: none;">
-                    <div class="live-stats">
+            <div class="results" id="camera-results" style="display: none;">
+                <div class="result-section">
+                    <h3>📊 Live Stats</h3>
+                    <div class="stats">
                         <div class="stat">
-                            <span class="stat-label">Objects:</span>
-                            <span id="live-object-count">0</span>
+                            <div>Objects</div>
+                            <strong id="live-object-count">0</strong>
                         </div>
                         <div class="stat">
-                            <span class="stat-label">Text Regions:</span>
-                            <span id="live-text-count">0</span>
+                            <div>Text</div>
+                            <strong id="live-text-count">0</strong>
                         </div>
                         <div class="stat">
-                            <span class="stat-label">FPS:</span>
-                            <span id="fps-counter">0</span>
+                            <div>FPS</div>
+                            <strong id="fps-counter">0</strong>
                         </div>
                     </div>
-                    <textarea id="live-text" readonly placeholder="Live detected text..."></textarea>
+                </div>
+                <div class="result-section">
+                    <h3>📝 Live Text</h3>
+                    <textarea id="live-text" readonly></textarea>
                 </div>
             </div>
         </div>
 
-        <div class="loading-overlay" id="loading-overlay">
+        <div class="loading hidden" id="loading">
             <div class="loading-content">
                 <div class="spinner"></div>
-                <p id="loading-text">Loading models...</p>
+                <div id="loading-text">Loading models...</div>
             </div>
         </div>
     </div>
