@@ -29,7 +29,7 @@ export class YOLODetector {
             
             // Warm up the model
             const dummyInput = tf.zeros([1, this.inputSize, this.inputSize, 3], 'int32');
-            await this.model.predict(dummyInput);
+            await this.model.executeAsync(dummyInput);
             dummyInput.dispose();
             
         } catch (error) {
@@ -48,7 +48,7 @@ export class YOLODetector {
             const tensor = this.preprocessImage(canvas);
             
             // Run inference
-            const predictions = await this.model.predict(tensor);
+            const predictions = await this.model.executeAsync(tensor);
             
             // Process predictions
             const detections = await this.processDetections(predictions, canvas.width, canvas.height);
