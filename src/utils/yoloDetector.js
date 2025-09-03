@@ -117,6 +117,12 @@ export class YOLODetector {
                 }
             }
 
+            // Defensive check to ensure all required tensors are defined
+            if (!boxes || !scores || !classes) {
+                console.warn('One or more required tensors (boxes, scores, classes) are undefined');
+                return [];
+            }
+
             const boxesData = await boxes.data();
             const scoresData = await scores.data();
             const classesData = await classes.data();
