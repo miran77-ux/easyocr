@@ -1,0 +1,20 @@
+{
+  "name": "yolo-ocr-web-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.15.0",
+    "@tensorflow/tfjs-backend-webgl": "^4.15.0",
+    "@tensorflow/tfjs-converter": "^4.15.0",
+    "tesseract.js": "^5.0.4"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
